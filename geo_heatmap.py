@@ -14,7 +14,7 @@ import webbrowser
 from xml.etree import ElementTree
 from xml.dom import minidom
 import zipfile
-
+from shapely.geometry import shape, Point
 
 class Generator:
     def __init__(self):
@@ -209,6 +209,41 @@ class Generator:
         min_opacity = settings["min_opacity"]
         max_zoom = settings["max_zoom"]
 
+        # Loop over coords, for each coord loop over states
+        # Create list of states for each coord
+        states_directory = "locations/states"
+        states = os.listdir(states_directory)
+            
+        states_visited = set()
+
+        # us = 50 -> 19 N, -65 -> -166 W
+        # 39.793131, -86.234042
+
+        # This is far too slow
+        # Speed up by skipping X coords after finding a state?
+        for coords, magnitude in self.coordinates.items():
+            in_us = (coords[0] > 19 and coords[0] < 50) and (coords[1] < -65 and coords[1] > -166)
+            if in_us:
+                for state in states:
+                    state_found = False
+                    file_path = os.path.join(states_directory, state)
+                    
+                    # Open the file and load the JSON data
+                    with open(file_path, 'r') as file:
+                        state_poly = json.load(file)
+
+                    data_point = Point(coords[1], coords[0])
+                    for feature in state_poly['features']:
+                        if feature['geometry']['type'] == 'Polygon':
+                            if shape(feature['geometry']).contains(data_point):
+                                states_visited.add(state[:-5])
+                                state_found = True
+                    
+                    if state_found:
+                        break
+                                
+        print("States visited: " + str(states_visited))
+
         map_data = [(coords[0], coords[1], magnitude)
                     for coords, magnitude in self.coordinates.items()]
 
@@ -329,7 +364,7 @@ if __name__ == "__main__":
     if not isTextBasedBrowser(webbrowser.get()):
         try:
             print("[info] Opening {} in browser".format(output_file))
-            webbrowser.open("file://" + os.path.realpath(output_file))
+            # webbrowser.open("file://" + os.path.realpath(output_file))
         except webbrowser.Error:
             print("[info] No runnable browser found. Open {} manually.".format(
                 output_file))
