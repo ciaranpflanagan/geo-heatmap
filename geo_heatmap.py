@@ -209,6 +209,12 @@ class Generator:
         min_opacity = settings["min_opacity"]
         max_zoom = settings["max_zoom"]
 
+        # Generate map
+        m = folium.Map(location=self.max_coordinates,
+            zoom_start=zoom_start,
+            tiles=tiles,
+            attr="<a href=https://github.com/luka1199/geo-heatmap>geo-heatmap</a>")
+
         # Loop over coords, for each coord loop over states
         # Create list of states for each coord
         states_directory = "locations/states"
@@ -238,6 +244,11 @@ class Generator:
                             if shape(feature['geometry']).contains(data_point):
                                 states_visited.add(state[:-5])
                                 state_found = True
+
+                                # Add polygon to map
+                                state_polygon = feature['geometry']['coordinates'][0]
+                                state_polygon = [(lat, lon) for lon, lat in state_polygon]
+                                folium.Polygon(locations=state_polygon, color="blue", fill=True).add_to(m)
                     
                     if state_found:
                         break
@@ -247,21 +258,6 @@ class Generator:
         map_data = [(coords[0], coords[1], magnitude)
                     for coords, magnitude in self.coordinates.items()]
 
-        # Generate map
-        m = folium.Map(location=self.max_coordinates,
-                       zoom_start=zoom_start,
-                       tiles=tiles,
-                       attr="<a href=https://github.com/luka1199/geo-heatmap>geo-heatmap</a>")
-
-        # Generate heat map
-        heatmap = HeatMap(map_data,
-                          max_val=self.max_magnitude,
-                          min_opacity=min_opacity,
-                          radius=radius,
-                          blur=blur,
-                          max_zoom=max_zoom)
-
-        m.add_child(heatmap)
         return m
 
     def run(self, data_files, output_file, date_range, stream_data, settings):
@@ -364,7 +360,7 @@ if __name__ == "__main__":
     if not isTextBasedBrowser(webbrowser.get()):
         try:
             print("[info] Opening {} in browser".format(output_file))
-            # webbrowser.open("file://" + os.path.realpath(output_file))
+            webbrowser.open("file://" + os.path.realpath(output_file))
         except webbrowser.Error:
             print("[info] No runnable browser found. Open {} manually.".format(
                 output_file))
