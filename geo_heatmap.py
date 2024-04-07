@@ -16,6 +16,8 @@ import zipfile
 from shapely.geometry import shape, Point
 from rtree import index
 from shapely.geometry import Point, Polygon
+from datetime import datetime, timedelta
+import dateutil.parser
 
 class Generator:
     def __init__(self):
@@ -231,16 +233,25 @@ class Generator:
 
         # Step 2 and 3: Check each GPS coordinate
         visited_polygons = set()
+        skip_until = None
+
         w = [Bar(), Percentage(), " ", ETA()]
         with ProgressBar(max_value=len(self.coordinates.items()), widgets=w) as pb:
-            i = 0
+            i = 0 # Progress bar counter
             for coord, magnitude in self.coordinates.items():
+                time = dateutil.parser.parse(coord[2])
+                if skip_until is not None and time < skip_until:
+                    continue
+
                 point = Point(coord[1], coord[0])
                 # Step 2: Identify potential matches quickly using the R-tree index
                 for state_id in idx.intersection(point.coords[0]):
                     # Step 3: Perform detailed check
                     if self.is_in_state(point, states_directory, states[state_id]):
                         visited_polygons.add(states[state_id])
+                        
+                        # Skip the next hour of coordinates
+                        skip_until = time + timedelta(hours=.5)
 
                 i += 1
                 pb.update(i)
