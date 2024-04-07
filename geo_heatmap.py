@@ -4,7 +4,6 @@ from argparse import ArgumentParser, RawTextHelpFormatter
 import collections
 import fnmatch
 import folium
-from folium.plugins import HeatMap
 import ijson
 import json
 import os
@@ -15,6 +14,8 @@ from xml.etree import ElementTree
 from xml.dom import minidom
 import zipfile
 from shapely.geometry import shape, Point
+from rtree import index
+from shapely.geometry import Point, Polygon
 
 class Generator:
     def __init__(self):
@@ -94,7 +95,8 @@ class Generator:
                 if "latitudeE7" not in loc or "longitudeE7" not in loc:
                     continue
                 coords = (round(loc["latitudeE7"] / 1e7, 6),
-                            round(loc["longitudeE7"] / 1e7, 6))
+                            round(loc["longitudeE7"] / 1e7, 6),
+                            loc["timestamp"])
 
                 if timestampInRange(loc[key_timestamp], date_range):
                     self.updateCoord(coords)
@@ -190,7 +192,7 @@ class Generator:
         self.coordinates[coords] += 1
         self.stats["Data points"] += 1
         if self.coordinates[coords] > self.max_magnitude:
-            self.max_coordinates = coords
+            self.max_coordinates = (coords[0], coords[1])
             self.max_magnitude = self.coordinates[coords]
 
     def generateMap(self, settings):
@@ -219,46 +221,62 @@ class Generator:
         # Create list of states for each coord
         states_directory = "locations/states"
         states = os.listdir(states_directory)
-            
-        states_visited = set()
 
-        # us = 50 -> 19 N, -65 -> -166 W
-        # 39.793131, -86.234042
+        # --------------- R-tree approach ----------------
+        # Step 1: Create the R-tree index for polygons
+        idx = index.Index()
+        for i, polygon in enumerate(states):
+            state_polygon = self.get_state_polygon(polygon, states_directory)
+            idx.insert(i, state_polygon.bounds)
 
-        # This is far too slow
-        # Speed up by skipping X coords after finding a state?
-        for coords, magnitude in self.coordinates.items():
-            in_us = (coords[0] > 19 and coords[0] < 50) and (coords[1] < -65 and coords[1] > -166)
-            if in_us:
-                for state in states:
-                    state_found = False
-                    file_path = os.path.join(states_directory, state)
-                    
-                    # Open the file and load the JSON data
-                    with open(file_path, 'r') as file:
-                        state_poly = json.load(file)
+        # Step 2 and 3: Check each GPS coordinate
+        visited_polygons = set()
+        w = [Bar(), Percentage(), " ", ETA()]
+        with ProgressBar(max_value=len(self.coordinates.items()), widgets=w) as pb:
+            i = 0
+            for coord, magnitude in self.coordinates.items():
+                point = Point(coord[1], coord[0])
+                # Step 2: Identify potential matches quickly using the R-tree index
+                for state_id in idx.intersection(point.coords[0]):
+                    # Step 3: Perform detailed check
+                    if self.is_in_state(point, states_directory, states[state_id]):
+                        visited_polygons.add(states[state_id])
 
-                    data_point = Point(coords[1], coords[0])
-                    for feature in state_poly['features']:
-                        if feature['geometry']['type'] == 'Polygon':
-                            if shape(feature['geometry']).contains(data_point):
-                                states_visited.add(state[:-5])
-                                state_found = True
+                i += 1
+                pb.update(i)
 
-                                # Add polygon to map
-                                state_polygon = feature['geometry']['coordinates'][0]
-                                state_polygon = [(lat, lon) for lon, lat in state_polygon]
-                                folium.Polygon(locations=state_polygon, color="blue", fill=True).add_to(m)
-                    
-                    if state_found:
-                        break
-                                
-        print("States visited: " + str(states_visited))
+        # Add state polygons to map
+        for state in visited_polygons:
+            state_polygon = self.get_state_polygon(state, states_directory)
+            state_polygon = [(lat, lon) for lon, lat in state_polygon.exterior.coords]
+            folium.Polygon(locations=state_polygon, color="blue", fill=True).add_to(m)
 
-        map_data = [(coords[0], coords[1], magnitude)
-                    for coords, magnitude in self.coordinates.items()]
+        print("Visited polygons:", visited_polygons)
 
         return m
+    
+    def get_state_polygon(self, state, states_directory):
+        file_path = os.path.join(states_directory, state)
+        
+        # Open the file and load the JSON data
+        with open(file_path, 'r') as file:
+            state_poly = json.load(file)
+
+        return Polygon(state_poly['features'][0]['geometry']['coordinates'][0])
+
+    def is_in_state(self, point, states_directory, state):
+        file_path = os.path.join(states_directory, state)
+        
+        # Open the file and load the JSON data
+        with open(file_path, 'r') as file:
+            state_poly = json.load(file)
+
+        for feature in state_poly['features']:
+            if feature['geometry']['type'] == 'Polygon':
+                if shape(feature['geometry']).contains(point):
+                    return True
+        
+        return False
 
     def run(self, data_files, output_file, date_range, stream_data, settings):
         """Load the data, generate the heatmap and save it.
