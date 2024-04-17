@@ -10,14 +10,14 @@ import os
 from progressbar import ProgressBar, Bar, ETA, Percentage
 from utils import *
 import webbrowser
-from xml.etree import ElementTree
 from xml.dom import minidom
 import zipfile
 from shapely.geometry import shape, Point
 from rtree import index
 from shapely.geometry import Point, Polygon
-from datetime import datetime, timedelta
+from datetime import timedelta
 import dateutil.parser
+from collections import Counter
 
 class Generator:
     def __init__(self):
@@ -232,7 +232,7 @@ class Generator:
             idx.insert(i, state_polygon.bounds)
 
         # Step 2 and 3: Check each GPS coordinate
-        visited_polygons = set()
+        visited_polygons = Counter()
         skip_until = None
 
         w = [Bar(), Percentage(), " ", ETA()]
@@ -248,7 +248,7 @@ class Generator:
                 for state_id in idx.intersection(point.coords[0]):
                     # Step 3: Perform detailed check
                     if self.is_in_state(point, states_directory, states[state_id]):
-                        visited_polygons.add(states[state_id])
+                        visited_polygons[states[state_id]] += 1
                         
                         # Skip the next hour of coordinates
                         skip_until = time + timedelta(hours=.5)
@@ -256,13 +256,14 @@ class Generator:
                 i += 1
                 pb.update(i)
 
+        # Filter out rouge gps points
+        visited_polygons = {polygon: count for polygon, count in visited_polygons.items() if count > 1}
+
         # Add state polygons to map
         for state in visited_polygons:
             state_polygon = self.get_state_polygon(state, states_directory)
             state_polygon = [(lat, lon) for lon, lat in state_polygon.exterior.coords]
             folium.Polygon(locations=state_polygon, color="blue", fill=True).add_to(m)
-
-        print("Visited polygons:", visited_polygons)
 
         return m
     
